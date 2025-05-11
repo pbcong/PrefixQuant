@@ -413,3 +413,14 @@ class WrappedPrefixCausalLM(torch.nn.Module):
             self.bs_prefixed_key_values = kv_cache_repeat(self.prefixed_key_values, bs)
             kwargs["past_key_values"] = self.bs_prefixed_key_values
         return self.model.forward(*args, **kwargs)
+    
+    def generate(self, *args, **kwargs):
+        """Pass through to the underlying model's generate method with prefixed key values."""
+        if kwargs.get("past_key_values") is None:
+            if len(args) >= 1:
+                bs = args[0].shape[0]
+            else:
+                bs = kwargs.get("input_ids", kwargs.get("inputs_embeds", torch.empty(0))).shape[0]
+            self.bs_prefixed_key_values = kv_cache_repeat(self.prefixed_key_values, bs)
+            kwargs["past_key_values"] = self.bs_prefixed_key_values
+        return self.model.generate(*args, **kwargs)

@@ -95,21 +95,28 @@ def get_c4(tokenizer, train_size, val_size, seed, seqlen, test_only):
                     )
     except:
         traindata = load_dataset(
-            'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train'
+            'json',
+            data_files={'train': 'https://huggingface.co/datasets/allenai/c4/resolve/main/en/c4-train.00000-of-01024.json.gz'},
+            split='train'
         )
+
+        # Load validation split as custom dataset
         valdata = load_dataset(
-            'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation'
+            'json',
+            data_files={'train': 'https://huggingface.co/datasets/allenai/c4/resolve/main/en/c4-validation.00000-of-00008.json.gz'},
+            split='train'
         )
 
     random.seed(0)
     valenc = []
-    for _ in range(256):
+    print(f"Validation dataset size: {len(valdata)}")
+    for _ in range(min(256, len(valdata))):
         while True:
             i = random.randint(0, len(valdata) - 1)
             tmp = tokenizer(valdata[i]['text'], return_tensors='pt')
             if tmp.input_ids.shape[1] >= seqlen:
                 break
-        i = random.randint(0, tmp.input_ids.shape[1] - seqlen - 1)
+        i = random.randint(0, max(0, tmp.input_ids.shape[1] - seqlen - 1))
         j = i + seqlen
         valenc.append(tmp.input_ids[:, i:j])
     valenc = torch.hstack(valenc)
@@ -118,6 +125,7 @@ def get_c4(tokenizer, train_size, val_size, seed, seqlen, test_only):
 
     random.seed(seed)
     trainloader = []
+    print(f"Training dataset size: {len(traindata)}")
     val_sample_ratio = 0.9  # sample train from [0:0.9] and val from [0.9:1.0] to avoid overlap
     for _ in range(train_size):
         while True:
@@ -146,9 +154,7 @@ def get_c4(tokenizer, train_size, val_size, seed, seqlen, test_only):
         tar[:, :-1] = -100
         valloader.append((inp, tar))
 
-
-
-    return trainloader, valloader 
+    return trainloader, valloader
 
 def get_redpajama(tokenizer, train_size, val_size, seed, seqlen):
     print("get_redpajama")
@@ -211,35 +217,42 @@ def get_loaders(
 def test_ppl(args, model, tokenizer,prefixed_key_values=None, datasets=['wikitext2']):
     results = {}
     for dataset in datasets:
-        testloader = get_loaders(
-            dataset,
-            tokenizer,
-            seed=0,
-            seqlen=args.ppl_seqlen,
-            test_only=True
-        )
-        if "c4" in dataset:
-            testenc = testloader
-        else:
-            testenc = testloader.input_ids
+        try:
+            print(f"Testing on {dataset}...")
+            testloader = get_loaders(
+                dataset,
+                tokenizer,
+                seed=0,
+                seqlen=args.ppl_seqlen,
+                test_only=True
+            )
+            if "c4" in dataset:
+                testenc = testloader
+            else:
+                testenc = testloader.input_ids
 
-        seqlen = args.ppl_seqlen
-        nsamples = testenc.numel() // seqlen
-        model.eval()
-        nlls = []
-        for i in tqdm(range(nsamples)):
-            batch = testenc[:, (i * seqlen) : ((i + 1) * seqlen)]
-            labels = testenc[:, (i * seqlen) : ((i + 1) * seqlen)]
-            batch = batch.to(model.device)
-            labels = labels.to(model.device)
-            outputs = model(batch,labels=labels, past_key_values=prefixed_key_values)
-            neg_log_likelihood = outputs.loss * seqlen
-            nlls.append(neg_log_likelihood)
+            seqlen = args.ppl_seqlen
+            nsamples = testenc.numel() // seqlen
+            model.eval()
+            nlls = []
+            for i in tqdm(range(nsamples)):
+                batch = testenc[:, (i * seqlen) : ((i + 1) * seqlen)]
+                labels = testenc[:, (i * seqlen) : ((i + 1) * seqlen)]
+                batch = batch.to(model.device)
+                labels = labels.to(model.device)
+                outputs = model(batch,labels=labels, past_key_values=prefixed_key_values)
+                neg_log_likelihood = outputs.loss * seqlen
+                nlls.append(neg_log_likelihood)
 
-        
-        ppl = torch.exp(torch.stack(nlls).sum() / (nsamples * seqlen))
-        results[dataset] = ppl.item()
-        print(f'{dataset}:{ppl}')
+            
+            ppl = torch.exp(torch.stack(nlls).sum() / (nsamples * seqlen))
+            results[dataset] = ppl.item()
+            print(f'{dataset}:{ppl}')
+        except Exception as e:
+            print(f"Error evaluating on {dataset}: {str(e)}")
+            print(f"Skipping {dataset} evaluation")
+            continue
+            
     return results
 
 class BlockTrainDataset(Dataset):

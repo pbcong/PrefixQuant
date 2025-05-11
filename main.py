@@ -27,46 +27,52 @@ def evaluate(model, tokenizer,prefixed_key_values, args, logger):
     if args.eval_ppl:
         datasets = ["wikitext2", "c4"]
         # datasets = ["wikitext2"]
-        ppl_results = test_ppl(args, model, tokenizer, prefixed_key_values, datasets)
-        for dataset in ppl_results:
-            logger.info(f'{dataset} perplexity: {ppl_results[dataset]:.2f}')
-            results_str += f"{ppl_results[dataset]:.2f} "
-    
+        try:
+            ppl_results = test_ppl(args, model, tokenizer, prefixed_key_values, datasets)
+            for dataset in ppl_results:
+                logger.info(f'{dataset} perplexity: {ppl_results[dataset]:.2f}')
+                results_str += f"{ppl_results[dataset]:.2f} "
+        except Exception as e:
+            logger.error(f"Error during perplexity evaluation: {str(e)}")
+            logger.info("Continuing with other evaluations...")
 
 
     if args.eval_tasks != "":
-        if prefixed_key_values is not None:
-            model = model_utils.WrappedPrefixCausalLM(model, prefixed_key_values)
-        import lm_eval
-        from lm_eval.models.huggingface import HFLM
-        from lm_eval.utils import make_table
-        task_list = args.eval_tasks.split(',')
-        model = HFLM(pretrained=model, batch_size=args.eval_batch_size)
-        task_manager = lm_eval.tasks.TaskManager()
-        results = lm_eval.simple_evaluate(
-        model=model,
-        tasks=task_list,
-        num_fewshot=0,
-        task_manager=task_manager,
-        )
-        logger.info(make_table(results))
-        total_acc = 0
-        total_acc_with_norm = 0
-        for task in ['winogrande','hellaswag','arc_challenge','arc_easy','piqa']:
-            if task in task_list:
-                total_acc += results['results'][task]['acc,none']
-                results_str += f"{results['results'][task]['acc,none']*100:.2f} "
-                if 'acc_norm,none' in results['results'][task]:
-                    results_str += f"{results['results'][task]['acc_norm,none']*100:.2f} "
-                    total_acc_with_norm += results['results'][task]['acc_norm,none']
-                else:
-                    total_acc_with_norm += results['results'][task]['acc,none']
-        logger.info(f'Average Acc: {total_acc/len(task_list)*100:.2f}%')
-        logger.info(f'Average Acc (with norm): {total_acc_with_norm/len(task_list)*100:.2f}%')
-        logger.info(f'Results string: {results_str.strip()}')
-        # remove wrapper
-        if prefixed_key_values is not None:
-            model = model.model
+        try:
+            if prefixed_key_values is not None:
+                model = model_utils.WrappedPrefixCausalLM(model, prefixed_key_values)
+            import lm_eval
+            from lm_eval.models.huggingface import HFLM
+            from lm_eval.utils import make_table
+            task_list = args.eval_tasks.split(',')
+            model = HFLM(pretrained=model, batch_size=args.eval_batch_size)
+            task_manager = lm_eval.tasks.TaskManager()
+            results = lm_eval.simple_evaluate(
+            model=model,
+            tasks=task_list,
+            num_fewshot=0,
+            task_manager=task_manager,
+            )
+            logger.info(make_table(results))
+            total_acc = 0
+            total_acc_with_norm = 0
+            for task in ['winogrande','hellaswag','arc_challenge','arc_easy','piqa']:
+                if task in task_list:
+                    total_acc += results['results'][task]['acc,none']
+                    results_str += f"{results['results'][task]['acc,none']*100:.2f} "
+                    if 'acc_norm,none' in results['results'][task]:
+                        results_str += f"{results['results'][task]['acc_norm,none']*100:.2f} "
+                        total_acc_with_norm += results['results'][task]['acc_norm,none']
+                    else:
+                        total_acc_with_norm += results['results'][task]['acc,none']
+            logger.info(f'Average Acc: {total_acc/len(task_list)*100:.2f}%')
+            logger.info(f'Average Acc (with norm): {total_acc_with_norm/len(task_list)*100:.2f}%')
+            logger.info(f'Results string: {results_str.strip()}')
+            # remove wrapper
+            if prefixed_key_values is not None:
+                model = model.model
+        except Exception as e:
+            logger.error(f"Error during task evaluation: {str(e)}")
 
 
 
@@ -319,7 +325,21 @@ def main():
     if args.save_quant_dir:
         logger.info("start saving model")
         model.save_pretrained(args.save_quant_dir)  
-        tokenizer.save_pretrained(args.save_quant_dir) 
+        
+        # Instead of just saving the tokenizer, copy all tokenizer files from the original model path
+        import shutil
+        import glob
+        
+        # Ensure tokenizer files are copied from the original model path
+        for file in glob.glob(os.path.join(args.model_path, "tokenizer*")):
+            shutil.copy(file, args.save_quant_dir)
+        # For sentencepiece models
+        for file in glob.glob(os.path.join(args.model_path, "*.model")):
+            shutil.copy(file, args.save_quant_dir)
+        # For special tokens and configs
+        for file in glob.glob(os.path.join(args.model_path, "*tokens*.json")):
+            shutil.copy(file, args.save_quant_dir)
+        
         torch.save(prefixed_key_values,os.path.join(args.save_quant_dir, 'prefixed_key_values.pth'))
         quant_config = get_quant_config(args)
         quant_config['prefixed_tokens'] = prefixed_tokens

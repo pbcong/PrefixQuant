@@ -191,6 +191,7 @@ def get_activation_hook_2(layer_name, activation_dict, is_input=True):
     return hook
 
 def get_nrom_and_decoder_class(model_family, model):
+    print (model_family)
     if model_family == 'llama':
         from transformers.models.llama.modeling_llama import LlamaRMSNorm,LlamaDecoderLayer
         norm_class = LlamaRMSNorm

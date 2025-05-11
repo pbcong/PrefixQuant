@@ -29,9 +29,9 @@ pip install -r requirements.txt
 We provide an example command to quantized `Llama-3-8B` without fine-tuning:
 ```
 CUDA_VISIBLE_DEVICES=0 python main.py \
---model_path path/to/llama-3-8B  \
---model_name Llama-3-8b \
---output_dir ./log/llama-3-8b-w4a4kv4 \
+--model_path deepseek-ai/DeepSeek-R1-Distill-Qwen-7B  \
+--model_name DeepSeek-R1-Distill-Qwen-7B \
+--output_dir ./log/deepseek-qwen-7b-w4a4kv4 \
 --wbits 4 \
 --input_bits 4 \
 --input_mode static \
@@ -46,7 +46,7 @@ CUDA_VISIBLE_DEVICES=0 python main.py \
 --set_prefixed_tokens \
 --eval_ppl \
 --eval_tasks  piqa,arc_easy,arc_challenge,hellaswag,winogrande \
---save_quant_dir ./pre_quantized_models/llama-3-8b-w4a4kv4
+--save_quant_dir ./pre_quantized_models/deepseek-qwen-7b-w4a4kv4
 ```
 You can find the detailed fine-tuning setting in the paper. There are some useful information as follows:
 - For dynamic quantization, you should add `--activation_clipping` to enhance the perfomance.
