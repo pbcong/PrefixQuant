@@ -93,3 +93,66 @@ If you use our PrefixQuant approach in your research, please cite our paper:
   year={2024}
 }
 ```
+
+
+training prefix token:
+CUDA_VISIBLE_DEVICES=0 python main.py \
+    --model_path deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
+    --model_name Llama-8B-prefix-trained \
+    --output_dir ./log/deepseek-llama-8b-w4a4kv4-prefix-trained \
+    --wbits 4 \
+    --input_bits 4 \
+    --input_mode static \
+    --v_bits 4 \
+    --k_bits 4 \
+    --kv_group_size 128 \
+    --kv_mode static \
+    --mse_init \
+    --pre_rotate \
+    --down_online_had \
+    --qk_online_had \
+    --set_prefixed_tokens \
+    --epochs 20 \
+    --quant_lr 5e-5 \
+    --weight_lr 5e-6 \
+    --calib_dataset pile \
+    --train_size 512 \
+    --val_size 64 \
+    --batch_size 4 \
+    --training_seqlen 1024 \
+    --eval_ppl \
+    --eval_tasks piqa,arc_easy,arc_challenge,hellaswag,winogrande,gsm8k \
+    --save_quant_dir ./pre_quantized_models/deepseek-llama-8b-w4a4kv4-prefix-trained
+
+CUDA_VISIBLE_DEVICES=0 python main.py \
+    --model_path deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
+    --model_name Llama-8B-prefix-trained \
+    --output_dir ./log/deepseek-llama-8b-w4a4kv4-prefix-trained \
+    --wbits 4 \
+    --input_bits 4 \
+    --input_mode static \
+    --v_bits 4 \
+    --k_bits 4 \
+    --kv_group_size 128 \
+    --kv_mode static \
+    --mse_init \
+    --pre_rotate \
+    --down_online_had \
+    --qk_online_had \
+    --set_prefixed_tokens \
+    --trainable_prefix \
+    --num_prefix_tokens 5 \
+    --prefix_lr 1e-4 \
+    --weight_smoothness_alpha 0.01 \
+    --attention_flatness_alpha 0.01 \
+    --epochs 20 \
+    --quant_lr 5e-5 \
+    --weight_lr 5e-6 \
+    --calib_dataset pile \
+    --train_size 512 \
+    --val_size 64 \
+    --batch_size 4 \
+    --training_seqlen 1024 \
+    --eval_ppl \
+    --eval_tasks piqa,arc_easy,arc_challenge,hellaswag,winogrande,gsm8k \
+    --save_quant_dir ./pre_quantized_models/deepseek-llama-8b-w4a4kv4-prefix-trained

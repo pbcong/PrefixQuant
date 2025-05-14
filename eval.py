@@ -13,6 +13,7 @@ import utils.rotation_utils as rotation_utils
 from utils.data_utils import test_ppl
 from utils.train_utils import load_json_as_namespace,create_logger
 from accelerate import init_empty_weights, infer_auto_device_map, load_checkpoint_in_model
+from utils.prefix_utils import init_trainable_prefix_embedding
 
 
 torch.backends.cudnn.benchmark = True
@@ -112,12 +113,29 @@ def main():
     logger = create_logger(output_dir)
 
     quant_config = load_json_as_namespace(os.path.join(args.quant_model_path, 'prefixequant_config.json'))
-    # if quant_config['set_prefixed_tokens']:
-    if quant_config.set_prefixed_tokens:
+    
+    # Handle prefixed key values
+    prefixed_key_values = None
+    trainable_prefix = None
+    
+    # Check if we're using trainable prefix embeddings
+    if hasattr(quant_config, 'trainable_prefix') and quant_config.trainable_prefix:
+        logger.info(f"Model uses trainable prefix with {quant_config.num_prefix_tokens} tokens")
+        # Either load the saved prefixed_key_values or reconstruct them from the trainable prefix
+        if os.path.exists(os.path.join(args.quant_model_path, 'prefixed_key_values.pth')):
+            prefixed_key_values = torch.load(os.path.join(args.quant_model_path, 'prefixed_key_values.pth'))
+            logger.info("Loaded cached prefix key-values")
+        
+        # Load the trainable prefix model for reference (not needed for inference with cached kv)
+        if os.path.exists(os.path.join(args.quant_model_path, 'trainable_prefix.pt')):
+            logger.info("Loading trainable prefix embedding weights")
+            # We'll create and load the model after initializing the main model
+    # Handle traditional prefixed tokens
+    elif hasattr(quant_config, 'set_prefixed_tokens') and quant_config.set_prefixed_tokens:
         prefixed_key_values = torch.load(os.path.join(args.quant_model_path, 'prefixed_key_values.pth'))
+        logger.info("Loaded prefixed key-values from fixed tokens")
     else:
-        prefixed_key_values = None
-
+        logger.info("No prefix embeddings or tokens found")
 
     # init quantized model
     config = AutoConfig.from_pretrained(args.quant_model_path,trust_remote_code=True)
@@ -146,27 +164,38 @@ def main():
     # init input quantizer
     if quant_config.input_bits < 16:
         logger.info('init input quantizer')
-        init_input_quantizer(quant_config, model,  minmax_init=False)
+        init_input_quantizer(quant_config, model, minmax_init=False)
 
     # init kv quantizer
     if quant_config.v_bits < 16:
         logger.info('init v quantizer')
-        init_v_quantizer(quant_config, model,  minmax_init=False)
+        init_v_quantizer(quant_config, model, minmax_init=False)
 
     # if True:
     if quant_config.k_bits < 16:
         # consistently init for wrap rope 
         logger.info('init k quantizer')
-        init_k_quantizer(quant_config, model,  minmax_init=False)
+        init_k_quantizer(quant_config, model, minmax_init=False)
 
-
+    # Load trainable prefix if needed
+    if hasattr(quant_config, 'trainable_prefix') and quant_config.trainable_prefix and os.path.exists(os.path.join(args.quant_model_path, 'trainable_prefix.pt')):
+        # Initialize trainable prefix
+        trainable_prefix = init_trainable_prefix_embedding(
+            model, 
+            quant_config.num_prefix_tokens
+        )
+        # Load the saved weights
+        trainable_prefix_state = torch.load(os.path.join(args.quant_model_path, 'trainable_prefix.pt'))
+        trainable_prefix.load_state_dict(trainable_prefix_state)
+        model.trainable_prefix_embedding = trainable_prefix
+        logger.info("Loaded trained prefix embedding model")
 
     # model.tie_weights()
     device_map = infer_auto_device_map(model)
     print("Loading pre-computed quantized weights...")
     load_checkpoint_in_model(model,checkpoint=args.quant_model_path,device_map=device_map,dtype=torch.float16)
     model.half()    # to make sure same evaluation results with main
-    evaluate(model, tokenizer, prefixed_key_values,  args,logger)
+    evaluate(model, tokenizer, prefixed_key_values, args, logger)
 
 
 

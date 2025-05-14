@@ -15,6 +15,7 @@ from utils.quant_utils import wrap_to_quant_model, init_weight_quantizer, init_i
 from utils import train_utils
 import utils.model_utils as model_utils
 import utils.rotation_utils as rotation_utils
+from utils.prefix_utils import init_trainable_prefix_embedding
 torch.backends.cudnn.benchmark = True
 
 @torch.no_grad()
@@ -121,11 +122,18 @@ def main():
     parser.add_argument("--down_online_had", action="store_true")
     parser.add_argument("--qk_online_had", action="store_true")
     parser.add_argument("--set_prefixed_tokens", action="store_true")
+    parser.add_argument("--trainable_prefix", action="store_true", help="Use trainable prefix embeddings instead of fixed tokens")
+    parser.add_argument("--num_prefix_tokens", type=int, default=5, help="Number of trainable prefix tokens to use")
     parser.add_argument("--outlier_threshold", type=int, default=64, help="\eta in Eq.(3), indicating the oitlier threshold ratio detect outlier tokens, ")
     parser.add_argument("--activation_clipping", action="store_true",help="layer-wise activation clipping for dynamic quantization")
     # -----------------training setting------------------------------------
     parser.add_argument("--quant_lr", type=float, default=5e-5, help="lr of quantization parameters (s and z)")
     parser.add_argument("--weight_lr", type=float, default=5e-6, help="lr of fp weights")
+    parser.add_argument("--prefix_lr", type=float, default=1e-4, help="lr of trainable prefix embeddings")
+    parser.add_argument("--weight_smoothness_alpha", type=float, default=0.01,
+                        help="Regularization weight for making embeddings quantization-friendly")
+    parser.add_argument("--attention_flatness_alpha", type=float, default=0.01,
+                        help="Regularization weight for making attention activations flatter")
     parser.add_argument("--min_lr_factor", type=float, default=10, help="min_lr = lr/min_lr_factor")
     parser.add_argument("--clip_grad", type=float, default=0.3)
     parser.add_argument("--wd", type=float, default=0,help="weight decay")
@@ -217,29 +225,34 @@ def main():
 
         prefixed_tokens = None                
         prefixed_key_values = None
+        trainable_prefix_embedding = None
         args.prefixed_length = 0
         activation_stat = None  
         include_static = (args.input_mode == "static" and args.input_bits < 16 ) or (args.kv_mode == "static" and (args.k_bits<16 or args.v_bits<16))            
-        if args.set_prefixed_tokens or include_static:
-            from utils.stat_utils import get_prefixed_tokens
-            # model and data prepaer
-            if model.device.type == 'cpu':
-                original_device = 'cpu'
-                block_class_name = model.model.layers[0].__class__.__name__
-                device_map = infer_auto_device_map(model, max_memory={i: args.max_memory for i in range(torch.cuda.device_count())}, no_split_module_classes=[block_class_name])
-                model = dispatch_model(model, device_map=device_map)
-            else:
-                original_device = 'cuda'
+        
+        # Move model to device for processing
+        if model.device.type == 'cpu':
+            original_device = 'cpu'
+            block_class_name = model.model.layers[0].__class__.__name__
+            device_map = infer_auto_device_map(model, max_memory={i: args.max_memory for i in range(torch.cuda.device_count())}, no_split_module_classes=[block_class_name])
+            model = dispatch_model(model, device_map=device_map)
+        else:
+            original_device = 'cuda'
+        
+        # Load calibration data
+        if args.set_prefixed_tokens or include_static or args.trainable_prefix:
             cal_dataloader, _ = get_loaders(
-            args.calib_dataset,
-            tokenizer,
-            train_size=64,
-            val_size=0,
-            seed=args.seed,
-            seqlen=512,
+                args.calib_dataset,
+                tokenizer,
+                train_size=64,
+                val_size=0,
+                seed=args.seed,
+                seqlen=512,
             )
-            # get prefixed tokens
-            if args.set_prefixed_tokens:
+            
+            # Handle regular prefix tokens
+            if args.set_prefixed_tokens and not args.trainable_prefix:
+                from utils.stat_utils import get_prefixed_tokens
                 tick = time.time()
                 prefixed_tokens = get_prefixed_tokens(cal_dataloader, model, tokenizer, args.model_name, outlier_threshold=args.outlier_threshold, activation_type='down_proj')
                 logger.info(f"get {len(prefixed_tokens)} prefixed tokens; token id:{prefixed_tokens}; text: {tokenizer.decode(prefixed_tokens)}")
@@ -255,10 +268,42 @@ def main():
                 prefixed_key_values = output.past_key_values
                 model.config.use_cache = use_cache
                 
+            # Handle trainable prefix embeddings
+            elif args.trainable_prefix:
+                logger.info(f"Creating trainable prefix with {args.num_prefix_tokens} tokens")
+                
+                # Get initial prefix tokens to initialize trainable embeddings (optional)
+                init_tokens = None
+                if args.set_prefixed_tokens:
+                    from utils.stat_utils import get_prefixed_tokens
+                    tick = time.time()
+                    init_tokens = get_prefixed_tokens(cal_dataloader, model, tokenizer, args.model_name, 
+                                                         outlier_threshold=args.outlier_threshold, activation_type='down_proj')
+                    if args.ablate_prefix_number is not None:
+                        init_tokens = init_tokens[:args.ablate_prefix_number]
+                    logger.info(f"Initializing trainable prefix from tokens: {init_tokens}")
+                    logger.info(f"time to get initial tokens:{time.time()-tick:.0}s")
+                
+                # Initialize trainable prefix embedding
+                trainable_prefix_embedding = init_trainable_prefix_embedding(
+                    model, 
+                    args.num_prefix_tokens, 
+                    init_from_tokens=init_tokens, 
+                    tokenizer=tokenizer
+                )
+                
+                # Get key-value cache from trainable embeddings
+                prefixed_key_values = trainable_prefix_embedding()
+                args.prefixed_length = args.num_prefix_tokens
+                model.config.prefixed_tokens = [0] * args.num_prefix_tokens  # Placeholder
+                
+                # Keep the trainable_prefix_embedding for training later
+                model.trainable_prefix_embedding = trainable_prefix_embedding
+                
             # get activation statistic for activation quantization
             if include_static:
-                # assert args.input_mode == "static" or args.kv_mode == "static","mse_init require static quantization"
                 activation_stat = get_act_stat(model, cal_dataloader, 'max', prefixed_tokens, args.down_online_had)
+            
             if original_device == 'cpu':
                 remove_hook_from_module(model, recurse=True)
                 model = model.cpu()
@@ -286,13 +331,9 @@ def main():
             
         train_utils.cleanup_memory()
 
-
-
-
-        # quantization
-        # block_cal = (args.epoch>0 or args.mse_init)
+        # Quantization training
         if args.epochs > 0 or args.mse_init:
-            assert args.wbits < 16 or args.input_bits < 16 or args.output_bits < 16
+            assert args.wbits < 16 or args.input_bits < 16 or args.output_bits < 16 or args.trainable_prefix
             logger.info("=== start quantization Training ===")
             tick = time.time()     
             # load calibration dataset
@@ -318,7 +359,7 @@ def main():
                 )
                 torch.save(trainloader, cache_trainloader)    
                 torch.save(valloader, cache_valloader)    
-            block_ap(model,prefixed_key_values,args,trainloader,valloader,logger)
+            model, prefixed_key_values = block_ap(model,prefixed_key_values,args,trainloader,valloader,logger)
             logger.info(time.time() - tick)
     model.half()
     torch.cuda.empty_cache()
@@ -340,9 +381,19 @@ def main():
         for file in glob.glob(os.path.join(args.model_path, "*tokens*.json")):
             shutil.copy(file, args.save_quant_dir)
         
-        torch.save(prefixed_key_values,os.path.join(args.save_quant_dir, 'prefixed_key_values.pth'))
+        if trainable_prefix_embedding is not None:
+            # Save the trainable prefix embedding separately
+            torch.save(trainable_prefix_embedding.state_dict(), os.path.join(args.save_quant_dir, 'trainable_prefix.pt'))
+            # Generate and save prefixed_key_values for inference
+            prefixed_key_values = trainable_prefix_embedding()
+        
+        torch.save(prefixed_key_values, os.path.join(args.save_quant_dir, 'prefixed_key_values.pth'))
+        
         quant_config = get_quant_config(args)
         quant_config['prefixed_tokens'] = prefixed_tokens
+        quant_config['trainable_prefix'] = args.trainable_prefix
+        quant_config['num_prefix_tokens'] = args.num_prefix_tokens if args.trainable_prefix else (len(prefixed_tokens) if prefixed_tokens else 0)
+        
         train_utils.save_dict_as_json(quant_config, os.path.join(args.save_quant_dir, 'prefixequant_config.json'))
         logger.info(f"save model to {args.save_quant_dir} success")
     evaluate(model, tokenizer, prefixed_key_values,  args,logger)
