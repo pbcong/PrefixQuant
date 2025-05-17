@@ -45,13 +45,18 @@ def evaluate(model, tokenizer,prefixed_key_values, args, logger):
             from lm_eval.models.huggingface import HFLM
             from lm_eval.utils import make_table
             task_list = args.eval_tasks.split(',')
-            model = HFLM(pretrained=model, batch_size=args.eval_batch_size)
+            # Create HFLM with explicit tokenizer
+            model = HFLM(
+                pretrained=model,
+                tokenizer=tokenizer,  # Pass tokenizer explicitly
+                batch_size=args.eval_batch_size
+            )
             task_manager = lm_eval.tasks.TaskManager()
             try:
                 results = lm_eval.simple_evaluate(
                 model=model,
                 tasks=task_list,
-                num_fewshot=0,
+                num_fewshot=8,
                 task_manager=task_manager,
                 )
                 logger.info(make_table(results))
@@ -121,7 +126,16 @@ def main():
 
     # init quantized model
     config = AutoConfig.from_pretrained(args.quant_model_path,trust_remote_code=True)
-    tokenizer = AutoTokenizer.from_pretrained(args.original_model_path, use_fast=False,legacy=False,trust_remote_code=True)
+    if not args.original_model_path:
+        raise ValueError("--original_model_path must be specified to load the tokenizer")
+    logger.info(f"Loading tokenizer from {args.original_model_path}")
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.original_model_path,
+        use_fast=False,
+        legacy=False,
+        trust_remote_code=True,
+        local_files_only=False  # Allow downloading from HF if needed
+    )
     with init_empty_weights():
         model = AutoModelForCausalLM.from_pretrained(args.quant_model_path, config=config, device_map='cpu',torch_dtype=torch.float16,trust_remote_code=True)
     wrap_to_quant_model(model)

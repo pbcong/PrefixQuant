@@ -1,6 +1,7 @@
-cache 
+cache
 pre_quantized_models
 log
+logs1
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
