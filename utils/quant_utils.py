@@ -828,6 +828,7 @@ def get_quant_config(args):
     quantization_config["real_quant"] = args.real_quant    
     quantization_config["set_prefixed_tokens"] = args.set_prefixed_tokens    
     quantization_config["activation_clipping"] = args.activation_clipping    
+    quantization_config["trainable_prefix"] = getattr(args, "trainable_prefix", False)
     return quantization_config
 
 

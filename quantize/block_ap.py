@@ -162,8 +162,10 @@ def block_ap(
             self.position_ids = None
 
         def forward(self, inp, **kwargs):
-            self.dataset.update_data(self.index, inp.squeeze(0).to('cpu'))
-            self.index += 1
+            # Add bounds checking to prevent index out of bounds
+            if self.index < len(self.dataset):
+                self.dataset.update_data(self.index, inp.squeeze(0).to('cpu'))
+                self.index += 1
             if self.attention_mask is None:
                 self.attention_mask = kwargs["attention_mask"]
             if self.position_ids is None:

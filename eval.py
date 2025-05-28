@@ -56,7 +56,7 @@ def evaluate(model, tokenizer,prefixed_key_values, args, logger):
                 results = lm_eval.simple_evaluate(
                 model=model,
                 tasks=task_list,
-                num_fewshot=8,
+                num_fewshot=0,
                 task_manager=task_manager,
                 )
                 logger.info(make_table(results))

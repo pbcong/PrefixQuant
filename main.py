@@ -160,6 +160,11 @@ def main():
     parser.add_argument("--modified_index", type=int, default=0,help="")
     # ------------------ ablation ------------------------------------------
     parser.add_argument("--ablate_prefix_number", type=int, default=None,help="")
+    # ----------------- soft prompt / trainable prefix ------------------------------------
+    parser.add_argument("--trainable_prefix", action="store_true", help="learn prefix token embeddings instead of selecting discrete tokens")
+    parser.add_argument("--prefix_len", type=int, default=8, help="number of prefix tokens to add when --trainable_prefix is set")
+    parser.add_argument("--prefix_lr", type=float, default=1e-3, help="learning rate for trainable prefix training")
+    parser.add_argument("--prefix_epochs", type=int, default=20, help="number of training epochs for soft prefix")
 
     
 
@@ -220,7 +225,44 @@ def main():
         args.prefixed_length = 0
         activation_stat = None  
         include_static = (args.input_mode == "static" and args.input_bits < 16 ) or (args.kv_mode == "static" and (args.k_bits<16 or args.v_bits<16))            
-        if args.set_prefixed_tokens or include_static:
+        
+        if args.trainable_prefix:
+            from utils.prefix_train_utils import train_soft_prefix
+            
+            # Move model to GPU if it's on CPU
+            if model.device.type == 'cpu' and torch.cuda.is_available():
+                logger.info("[Main] Moving model to GPU for prefix training...")
+                block_class_name = model.model.layers[0].__class__.__name__
+                device_map = infer_auto_device_map(model, max_memory={i: args.max_memory for i in range(torch.cuda.device_count())}, no_split_module_classes=[block_class_name])
+                model = dispatch_model(model, device_map=device_map)
+                prefix_training_on_gpu = True
+            else:
+                prefix_training_on_gpu = False
+            
+            # Train the soft prefix tokens (on CPU/GPU depending on model device)
+            prefixed_tokens, activation_stat = train_soft_prefix(model, tokenizer, args, logger)
+            args.set_prefixed_tokens = True  # ensure later stages treat as prefixed
+            args.prefixed_length = len(prefixed_tokens)
+
+            # Compute KV cache for the learned prefix for later use
+            original_use_cache = model.config.use_cache
+            model.config.use_cache = True
+            device_for_prefix = next(model.parameters()).device
+            prefix_tensor = torch.tensor([prefixed_tokens], device=device_for_prefix)
+            with torch.no_grad():
+                output_with_prefix = model(prefix_tensor, return_dict=True)
+            prefixed_key_values = output_with_prefix.past_key_values
+            model.config.use_cache = original_use_cache
+
+            logger.info(f"Trainable prefix tokens ids: {prefixed_tokens}")
+            
+            # Move model back to CPU if it was originally on CPU
+            if prefix_training_on_gpu:
+                logger.info("[Main] Moving model back to CPU after prefix training...")
+                remove_hook_from_module(model, recurse=True)
+                model = model.cpu()
+
+        elif args.set_prefixed_tokens or include_static:
             from utils.stat_utils import get_prefixed_tokens
             # model and data prepaer
             if model.device.type == 'cpu':

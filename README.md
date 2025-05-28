@@ -93,3 +93,131 @@ If you use our PrefixQuant approach in your research, please cite our paper:
   year={2024}
 }
 ```
+
+# PrefixQuant: Trainable Prefix Integration
+
+## Example Command with All Optimizations Including Trainable Prefix
+
+Here's a comprehensive command that utilizes all performance optimizations including the new trainable prefix functionality:
+
+```bash
+python main.py \
+    --model_path meta-llama/Llama-2-7b-hf \
+    --save_quant_dir ./quantized_models/llama2-7b-w4g128-trainable-prefix \
+    --output_dir ./logs/llama2-7b-trainable-prefix \
+    --cache_dir ./cache \
+    --calib_dataset c4 \
+    --train_size 512 \
+    --val_size 64 \
+    --training_seqlen 1024 \
+    --ppl_seqlen 2048 \
+    --seed 42 \
+    --wbits 4 \
+    --w_group_size 128 \
+    --w_asym \
+    --input_bits 8 \
+    --input_group_size 64 \
+    --input_mode dynamic \
+    --input_asym \
+    --k_bits 8 \
+    --v_bits 8 \
+    --kv_group_size 64 \
+    --kv_mode dynamic \
+    --kv_asym \
+    --pre_rotate \
+    --rotate_mode hadamard \
+    --down_online_had \
+    --qk_online_had \
+    --trainable_prefix \
+    --prefix_len 8 \
+    --prefix_lr 1e-3 \
+    --prefix_epochs 20 \
+    --prefix_loss_type l2 \
+    --activation_clipping \
+    --mse_init \
+    --mse_init_size 8 \
+    --epochs 10 \
+    --quant_lr 5e-5 \
+    --weight_lr 5e-6 \
+    --min_lr_factor 10 \
+    --clip_grad 0.3 \
+    --batch_size 4 \
+    --loss_type mse \
+    --training_target fp_input \
+    --eval_ppl \
+    --eval_tasks "winogrande,hellaswag,arc_challenge,arc_easy,piqa" \
+    --eval_batch_size 16 \
+    --max_memory 65GiB
+```
+
+to train the prefix:
+python main.py \
+    --model_path meta-llama/Meta-Llama-3-8B \
+    --model_name Llama-3-8b \
+    --save_quant_dir ./quantized_models/llama3-8b-w4a4kv4-trained-prefix \
+    --output_dir ./logs/llama3-8b-w4a4kv4-trained-prefix \
+    --cache_dir ./cache \
+    --calib_dataset wikitext2 \
+    --train_size 512 \
+    --val_size 64 \ 
+    --training_seqlen 1024 \ 
+    --ppl_seqlen 2048 \
+    --seed 42 \
+    --wbits 4 \
+    --w_group_size 128 \
+    --w_asym \
+    --input_bits 8 \
+    --input_group_size 64 \
+    --input_mode dynamic \
+    --input_asym \
+    --k_bits 8 \
+    --v_bits 8 \
+    --kv_group_size 64 \
+    --kv_mode dynamic \
+    --kv_asym \
+    --pre_rotate \
+    --rotate_mode hadamard \
+    --down_online_had \
+    --qk_online_had \
+    --trainable_prefix \
+    --prefix_len 8 \
+    --prefix_lr 1e-3 \
+    --prefix_epochs 20 \
+    --outlier_threshold 64 \
+    --batch_size 4 \
+    --activation_clipping \
+    --mse_init \
+    --mse_init_size 8 \
+    --epochs 10 \
+    --quant_lr 5e-5 \
+    --weight_lr 5e-6 \
+    --min_lr_factor 10 \
+    --clip_grad 0.3 \
+    --loss_type mse \
+    --training_target fp_input \
+    --eval_ppl \
+    --eval_tasks "winogrande,hellaswag,arc_challenge,arc_easy,piqa,gsm8k" \
+    --eval_batch_size 16 \
+    --max_memory 65GiB
+    
+python main.py --model_path meta-llama/Llama-2-7b-hf --model_name Llama-2-7b-hf --save_quant_dir ./quantized_models/llama2-7b-w4a4kv4-trained-prefix --output_dir ./logs/llama7-7b-w4a4kv4-trained-prefix --cache_dir ./cache --calib_dataset wikitext2 --train_size 512 --val_size 64 --training_seqlen 1024 --ppl_seqlen 2048 --seed 42 --wbits 4 --w_group_size 128 --w_asym --input_bits 8 --input_group_size 64 --input_mode dynamic --input_asym --k_bits 8 --v_bits 8 --kv_group_size 64 --kv_mode dynamic --kv_asym --pre_rotate --rotate_mode hadamard --down_online_had --qk_online_had --trainable_prefix --prefix_len 8 --prefix_lr 1e-3 --prefix_epochs 20 --outlier_threshold 64 --batch_size 4 --activation_clipping --mse_init --mse_init_size 8 --epochs 10 --quant_lr 5e-5 --weight_lr 5e-6 --min_lr_factor 10 --clip_grad 0.3 --loss_type mse --training_target fp_input --eval_ppl --eval_tasks "winogrande,hellaswag,arc_challenge,arc_easy,piqa,gsm8k" --eval_batch_size 16 --max_memory 65GiB
+    
+
+## Key Features Enabled:
+
+1. **Trainable Prefix (`--trainable_prefix`)**: Learns optimal prefix embeddings instead of using discrete tokens
+2. **Rotation (`--pre_rotate`, `--down_online_had`, `--qk_online_had`)**: Hadamard rotation for better quantization
+3. **Quantization Training (`--epochs 10`)**: Fine-tunes quantization parameters
+4. **MSE Initialization (`--mse_init`)**: Optimal quantizer initialization
+5. **Activation Clipping (`--activation_clipping`)**: Layer-wise activation clipping
+6. **Multi-bit Quantization**: 4-bit weights, 8-bit activations and KV cache
+7. **Comprehensive Evaluation**: Both perplexity and downstream tasks
+
+## Trainable Prefix Parameters:
+
+- `--prefix_len 8`: Number of learnable prefix tokens
+- `--prefix_lr 1e-3`: Learning rate for prefix embeddings
+- `--prefix_epochs 20`: Training epochs for prefix optimization
+- `--prefix_loss_type l2`: Loss function type (l2 or var)
+
+The trainable prefix will automatically initialize using good discrete tokens (if available) and then optimize them to flatten attention outputs for better quantization performance.
